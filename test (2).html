@@ -1,0 +1,1376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fleet Maintenance Scheduler</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- SheetJS library for Excel processing -->
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
+    <!-- html2canvas library for image generation -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <!-- jsPDF library for PDF generation -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+        }
+        .tab-button.active {
+            background-color: #3b82f6;
+            color: white;
+            border-color: #3b82f6;
+        }
+        .sub-tab-button.active {
+            background-color: #eef2ff;
+            color: #3b82f6;
+            font-weight: 600;
+        }
+        .modal {
+            transition: opacity 0.3s ease-in-out;
+        }
+        input[type="color"] {
+            -webkit-appearance: none;
+            border: none;
+            width: 40px;
+            height: 40px;
+            border-radius: 0.375rem;
+            cursor: pointer;
+        }
+        input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+        input[type="color"]::-webkit-color-swatch {
+            border: 1px solid #d1d5db;
+            border-radius: 0.375rem;
+        }
+        
+        /* Gantt Chart Styles */
+        .gantt-event-bar {
+            position: absolute;
+            top: 2px;
+            height: 20px;
+            border-radius: 0.25rem;
+            color: white;
+            font-size: 10px;
+            padding-left: 4px;
+            display: flex;
+            align-items: center;
+            overflow: hidden;
+            white-space: nowrap;
+            cursor: grab;
+            transition: filter 0.2s;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .gantt-event-bar:active { cursor: grabbing; }
+        .gantt-event-bar.past-event { cursor: not-allowed; }
+
+        .gantt-event-extension {
+            position: absolute;
+            top: 2px;
+            height: 20px;
+            border-radius: 0 0.25rem 0.25rem 0;
+            background-image: repeating-linear-gradient(45deg, transparent, transparent 4px, rgba(255,255,255,0.4) 4px, rgba(255,255,255,0.4) 8px);
+        }
+
+        .resizer {
+            position: absolute;
+            right: 0;
+            top: 0;
+            width: 8px;
+            height: 100%;
+            cursor: ew-resize;
+            z-index: 10;
+        }
+        .gantt-event-bar:hover, .yearly-event-item:hover {
+            filter: brightness(1.2);
+            z-index: 20;
+        }
+         .gantt-tooltip {
+            visibility: hidden;
+            position: fixed;
+            background-color: #1f2937;
+            color: white;
+            padding: 8px;
+            border-radius: 6px;
+            z-index: 1001; /* High z-index for tooltip */
+            white-space: nowrap;
+            font-size: 12px;
+            opacity: 0;
+            transition: opacity 0.2s;
+            pointer-events: none;
+        }
+        .gantt-month-grid {
+            display: grid;
+            grid-template-columns: 80px 1fr;
+        }
+        .gantt-day-header {
+            display: grid;
+            grid-template-columns: repeat(31, minmax(0, 1fr));
+        }
+         .gantt-timeline-row {
+            display: grid;
+            grid-template-columns: repeat(31, minmax(0, 1fr));
+            min-height: 24px;
+        }
+
+        /* Yearly Calendar Styles */
+        .yearly-calendar-month-block {
+            border: 1px solid #e5e7eb;
+            border-radius: 0.5rem;
+            padding: 0.75rem;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+        }
+        .yearly-event-item {
+            position: absolute;
+            height: 18px; /* More space for label and line */
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            justify-content: flex-start;
+            overflow: hidden;
+            cursor: grab;
+        }
+        .yearly-event-label {
+            font-size: 9px;
+            line-height: 1.2;
+            white-space: nowrap;
+            padding-left: 1px;
+            color: #1f2937;
+        }
+        .yearly-event-line {
+            width: 100%;
+            height: 5px; /* Thicker line */
+            border-radius: 3px;
+            margin-top: auto;
+        }
+
+        .yearly-event-item.is-continuing-start .yearly-event-line { border-top-left-radius: 0; border-bottom-left-radius: 0; }
+        .yearly-event-item.is-continuing-end .yearly-event-line { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+        
+        .yearly-event-item.is-continuing-start::before {
+            content: ''; position: absolute; left: -5px; bottom: 2px;
+            width: 0; height: 0; border-top: 3px solid transparent; border-bottom: 3px solid transparent;
+            border-right: 5px solid; border-right-color: inherit;
+        }
+        .yearly-event-item.is-continuing-end::after {
+            content: ''; position: absolute; right: -5px; bottom: 2px;
+            width: 0; height: 0; border-top: 3px solid transparent; border-bottom: 3px solid transparent;
+            border-left: 5px solid; border-left-color: inherit;
+        }
+    </style>
+</head>
+<body class="p-4 sm:p-6 md:p-8">
+
+    <div id="main-container" class="max-w-7xl mx-auto bg-white rounded-2xl shadow-lg p-5 sm:p-8">
+        <header id="main-header" class="mb-8">
+            <h1 class="text-3xl font-bold text-gray-800">Fleet Maintenance Scheduler</h1>
+            <p class="text-gray-500 mt-1">Manage maintenance events and MRO providers efficiently.</p>
+        </header>
+
+        <!-- Main Tab Navigation -->
+        <div id="main-nav" class="border-b border-gray-200 mb-6">
+            <nav class="flex space-x-2 sm:space-x-4" aria-label="Tabs">
+                <button id="tab-schedule" class="tab-button active text-sm sm:text-base font-medium py-3 px-4 rounded-t-lg border-b-2 border-transparent hover:bg-blue-100">
+                    Schedule
+                </button>
+                <button id="tab-mro" class="tab-button text-sm sm:text-base font-medium py-3 px-4 rounded-t-lg border-b-2 border-transparent hover:bg-blue-100">
+                    MROs
+                </button>
+                <button id="tab-gantt" class="tab-button text-sm sm:text-base font-medium py-3 px-4 rounded-t-lg border-b-2 border-transparent hover:bg-blue-100">
+                    Gantt View
+                </button>
+                <button id="tab-yearly" class="tab-button text-sm sm:text-base font-medium py-3 px-4 rounded-t-lg border-b-2 border-transparent hover:bg-blue-100">
+                    Yearly View
+                </button>
+            </nav>
+        </div>
+
+        <!-- Tab Content -->
+        <main>
+            <!-- Schedule Tab -->
+            <div id="content-schedule">
+                 <!-- Excel Upload Section -->
+                <div class="bg-indigo-50 p-6 rounded-xl mb-6 border border-indigo-200">
+                    <h3 class="text-lg font-semibold text-gray-700 mb-4">Import from Excel</h3>
+                    <p class="text-sm text-gray-600 mb-4">Upload an Excel file with 'MROs' and 'Schedule' sheets to bulk update data. This will overwrite all existing entries.</p>
+                    <div class="flex flex-col sm:flex-row gap-4 items-center">
+                        <input type="file" id="excel-upload-input" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-violet-50 file:text-violet-700 hover:file:bg-violet-100" accept=".xlsx, .xls">
+                        <div class="flex gap-2 w-full sm:w-auto flex-shrink-0">
+                            <button id="upload-excel-btn" class="w-full sm:w-auto bg-indigo-500 text-white font-semibold py-2 px-4 rounded-md hover:bg-indigo-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">Upload File</button>
+                            <button id="download-template-btn" class="w-full sm:w-auto bg-gray-500 text-white font-semibold py-2 px-4 rounded-md hover:bg-gray-600">Download Template</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-gray-50 p-6 rounded-xl mb-6">
+                    <h3 class="text-lg font-semibold text-gray-700 mb-4">Add New Maintenance Event</h3>
+                    <form id="add-event-form" class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4 items-end">
+                        <div class="flex flex-col">
+                            <label for="tail-number" class="text-sm font-medium text-gray-600 mb-1">Tail Number</label>
+                            <input type="text" id="tail-number" placeholder="e.g., N12345" required class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500">
+                        </div>
+                        <div class="flex flex-col">
+                            <label for="mro-select" class="text-sm font-medium text-gray-600 mb-1">MRO</label>
+                            <select id="mro-select" required class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 bg-white">
+                            </select>
+                        </div>
+                        <div class="flex flex-col">
+                            <label for="sub-type-select" class="text-sm font-medium text-gray-600 mb-1">Sub Type</label>
+                            <select id="sub-type-select" required class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 bg-white">
+                                <option value="B777">B777</option>
+                                <option value="A320">A320</option>
+                                <option value="A330">A330</option>
+                                <option value="B787">B787</option>
+                            </select>
+                        </div>
+                         <div class="flex flex-col">
+                            <label for="event-type" class="text-sm font-medium text-gray-600 mb-1">Event Type</label>
+                            <input type="text" id="event-type" placeholder="e.g., C-Check" required class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500">
+                        </div>
+                        <div class="flex flex-col">
+                            <label for="planned-input" class="text-sm font-medium text-gray-600 mb-1">Planned Input</label>
+                            <input type="date" id="planned-input" required class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500">
+                        </div>
+                        <div class="flex flex-col">
+                            <label for="planned-output" class="text-sm font-medium text-gray-600 mb-1">Planned Output</label>
+                            <input type="date" id="planned-output" required class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500">
+                        </div>
+                        <button type="submit" class="w-full lg:col-span-6 bg-blue-500 text-white font-semibold py-2 px-4 rounded-md hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 mt-4 md:mt-0">Add Event</button>
+                    </form>
+                </div>
+
+                <div class="overflow-x-auto">
+                    <table class="min-w-full bg-white border border-gray-200">
+                        <thead class="bg-gray-100">
+                            <tr>
+                                <th class="text-left py-3 px-4 font-semibold text-sm text-gray-600 uppercase tracking-wider">Tail Number</th>
+                                <th class="text-left py-3 px-4 font-semibold text-sm text-gray-600 uppercase tracking-wider">MRO</th>
+                                <th class="text-left py-3 px-4 font-semibold text-sm text-gray-600 uppercase tracking-wider">Sub Type</th>
+                                <th class="text-left py-3 px-4 font-semibold text-sm text-gray-600 uppercase tracking-wider">Event Type</th>
+                                <th class="text-left py-3 px-4 font-semibold text-sm text-gray-600 uppercase tracking-wider">Planned Input</th>
+                                <th class="text-left py-3 px-4 font-semibold text-sm text-gray-600 uppercase tracking-wider">Planned Output</th>
+                                <th class="text-left py-3 px-4 font-semibold text-sm text-gray-600 uppercase tracking-wider">Actual Output</th>
+                                <th class="text-left py-3 px-4 font-semibold text-sm text-gray-600 uppercase tracking-wider">Extension (Days)</th>
+                                <th class="text-center py-3 px-4 font-semibold text-sm text-gray-600 uppercase tracking-wider">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="schedule-table-body" class="divide-y divide-gray-200">
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- MRO Management Tab -->
+            <div id="content-mro" class="hidden">
+                 <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+                    <div class="bg-gray-50 p-6 rounded-xl">
+                        <h3 class="text-lg font-semibold text-gray-700 mb-4">Add New MRO</h3>
+                        <form id="add-mro-form" class="space-y-4">
+                            <div>
+                                <label for="new-mro-name" class="text-sm font-medium text-gray-600 mb-1 block">MRO Name</label>
+                                <input type="text" id="new-mro-name" placeholder="Enter MRO name" required class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500">
+                            </div>
+                            <div>
+                                <label for="new-mro-country" class="text-sm font-medium text-gray-600 mb-1 block">Country</label>
+                                <input type="text" id="new-mro-country" placeholder="e.g., Germany" required class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500">
+                            </div>
+                            <div>
+                                <label for="new-mro-focal" class="text-sm font-medium text-gray-600 mb-1 block">Focal Point</label>
+                                <input type="text" id="new-mro-focal" placeholder="e.g., John Doe" required class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500">
+                            </div>
+                            <div>
+                               <label for="new-mro-color" class="text-sm font-medium text-gray-600 mb-1 block">Identifying Color</label>
+                               <div class="flex items-center space-x-2">
+                                   <input type="color" id="new-mro-color-picker" value="#3b82f6" class="p-1 h-10 w-10 border border-gray-300 rounded-md">
+                                   <input type="text" id="new-mro-color-hex" value="#3b82f6" required class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500">
+                               </div>
+                            </div>
+                             <button type="submit" class="w-full bg-blue-500 text-white font-semibold py-2 px-4 rounded-md hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">Add MRO</button>
+                        </form>
+                    </div>
+                    <div>
+                        <h3 class="text-lg font-semibold text-gray-700 mb-4">Existing MROs</h3>
+                        <ul id="mro-list" class="space-y-3">
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Gantt Chart Tab -->
+            <div id="content-gantt" class="hidden">
+                <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-4">
+                    <!-- Gantt Sub-tabs -->
+                    <div class="p-1 bg-gray-100 rounded-lg flex space-x-1 mb-4 sm:mb-0">
+                        <button id="gantt-sub-tab-preliminary" class="sub-tab-button active w-full sm:w-auto text-sm font-medium py-2 px-4 rounded-md">Preliminary</button>
+                        <button id="gantt-sub-tab-actual" class="sub-tab-button w-full sm:w-auto text-sm font-medium py-2 px-4 rounded-md">Actual</button>
+                    </div>
+                     <div class="flex items-center">
+                        <label for="gantt-year-select" class="mr-2 font-medium text-gray-700">Year:</label>
+                        <select id="gantt-year-select" class="border border-gray-300 rounded-md px-3 py-1 bg-white shadow-sm"></select>
+                         <button id="download-gantt-btn" class="ml-4 bg-green-500 text-white font-semibold py-2 px-4 rounded-md hover:bg-green-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500">
+                            Download View
+                        </button>
+                    </div>
+                </div>
+                <!-- Gantt Chart Containers -->
+                <div id="gantt-chart-container-preliminary"></div>
+                <div id="gantt-chart-container-actual" class="hidden"></div>
+                
+                <div id="gantt-tooltip" class="gantt-tooltip"></div>
+            </div>
+
+            <!-- Yearly Calendar Tab -->
+            <div id="content-yearly" class="hidden">
+                 <div id="yearly-view-header" class="flex justify-end items-center mb-4">
+                     <label for="yearly-year-select" class="mr-2 font-medium text-gray-700">Year:</label>
+                     <select id="yearly-year-select" class="border border-gray-300 rounded-md px-3 py-1 bg-white shadow-sm"></select>
+                     <button id="download-yearly-btn" class="ml-4 bg-green-500 text-white font-semibold py-2 px-4 rounded-md hover:bg-green-600">Download for Printing</button>
+                 </div>
+                 <div id="yearly-calendar-container" class="bg-white p-4">
+                     <!-- Yearly calendar will be rendered here -->
+                 </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Modals -->
+    <div id="edit-event-modal" class="modal fixed inset-0 bg-gray-600 bg-opacity-50 hidden items-center justify-center p-4 z-40">
+        <div class="bg-white rounded-lg shadow-xl p-8 w-full max-w-2xl transform transition-all">
+            <h2 class="text-2xl font-bold text-gray-800 mb-6">Edit Maintenance Event</h2>
+            <form id="edit-event-form">
+                <input type="hidden" id="edit-event-id">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                        <label for="edit-tail-number" class="block text-sm font-medium text-gray-700">Tail Number</label>
+                        <input type="text" id="edit-tail-number" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500">
+                    </div>
+                    <div>
+                        <label for="edit-mro-select" class="block text-sm font-medium text-gray-700">MRO</label>
+                        <select id="edit-mro-select" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 bg-white"></select>
+                    </div>
+                    <div>
+                        <label for="edit-sub-type-select" class="block text-sm font-medium text-gray-700">Sub Type</label>
+                        <select id="edit-sub-type-select" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 bg-white">
+                            <option value="B777">B777</option>
+                            <option value="A320">A320</option>
+                            <option value="A330">A330</option>
+                            <option value="B787">B787</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="edit-event-type" class="block text-sm font-medium text-gray-700">Event Type</label>
+                        <input type="text" id="edit-event-type" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500">
+                    </div>
+                    <div>
+                        <label for="edit-planned-input" class="block text-sm font-medium text-gray-700">Planned Input Date</label>
+                        <input type="date" id="edit-planned-input" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500">
+                    </div>
+                    <div>
+                        <label for="edit-planned-output" class="block text-sm font-medium text-gray-700">Planned Output Date</label>
+                        <input type="date" id="edit-planned-output" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500">
+                    </div>
+                    <div>
+                        <label for="edit-actual-output" class="block text-sm font-medium text-gray-700">Actual Output Date</label>
+                        <input type="date" id="edit-actual-output" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500">
+                    </div>
+                </div>
+                <div class="mt-8 flex justify-end space-x-3">
+                    <button type="button" class="cancel-edit-btn bg-gray-200 text-gray-700 font-semibold py-2 px-4 rounded-md hover:bg-gray-300">Cancel</button>
+                    <button type="submit" class="bg-green-500 text-white font-semibold py-2 px-4 rounded-md hover:bg-green-600">Save Changes</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    <div id="edit-mro-modal" class="modal fixed inset-0 bg-gray-600 bg-opacity-50 hidden items-center justify-center p-4 z-40">
+        <div class="bg-white rounded-lg shadow-xl p-8 w-full max-w-lg transform transition-all">
+            <h2 class="text-2xl font-bold text-gray-800 mb-6">Edit MRO</h2>
+            <form id="edit-mro-form" class="space-y-4">
+                <input type="hidden" id="edit-mro-id">
+                <div>
+                    <label for="edit-mro-name" class="block text-sm font-medium text-gray-700">MRO Name</label>
+                    <input type="text" id="edit-mro-name" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500">
+                </div>
+                <div>
+                    <label for="edit-mro-country" class="block text-sm font-medium text-gray-700">Country</label>
+                    <input type="text" id="edit-mro-country" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500">
+                </div>
+                <div>
+                    <label for="edit-mro-focal" class="block text-sm font-medium text-gray-700">Focal Point</label>
+                    <input type="text" id="edit-mro-focal" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500">
+                </div>
+                <div>
+                   <label for="edit-mro-color" class="text-sm font-medium text-gray-600 mb-1 block">Identifying Color</label>
+                   <div class="flex items-center space-x-2">
+                       <input type="color" id="edit-mro-color-picker" class="p-1 h-10 w-10 border border-gray-300 rounded-md">
+                       <input type="text" id="edit-mro-color-hex" required class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500">
+                   </div>
+                </div>
+                <div class="mt-8 flex justify-end space-x-3">
+                    <button type="button" class="cancel-edit-mro-btn bg-gray-200 text-gray-700 font-semibold py-2 px-4 rounded-md hover:bg-gray-300">Cancel</button>
+                    <button type="submit" class="bg-green-500 text-white font-semibold py-2 px-4 rounded-md hover:bg-green-600">Save Changes</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    <div id="confirmation-modal" class="modal fixed inset-0 bg-gray-600 bg-opacity-75 hidden items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-sm transform transition-all">
+             <h3 class="text-lg font-semibold text-gray-800">Confirm Change</h3>
+             <p id="confirmation-message" class="mt-2 text-sm text-gray-600">Are you sure you want to apply this change?</p>
+             <div class="mt-6 flex justify-end space-x-3">
+                 <button id="confirm-cancel-btn" class="bg-gray-200 text-gray-700 font-semibold py-2 px-4 rounded-md hover:bg-gray-300">Cancel</button>
+                 <button id="confirm-ok-btn" class="bg-blue-500 text-white font-semibold py-2 px-4 rounded-md hover:bg-blue-600">Confirm</button>
+             </div>
+        </div>
+    </div>
+    <div id="loading-modal" class="modal fixed inset-0 bg-gray-600 bg-opacity-75 hidden items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-sm text-center">
+             <h3 class="text-lg font-semibold text-gray-800">Generating PDF...</h3>
+             <p class="mt-2 text-sm text-gray-600">Please wait while we prepare your download.</p>
+        </div>
+    </div>
+
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            // --- STATE MANAGEMENT ---
+            let mros = [
+                { id: 1, name: 'AeroFix Solutions', country: 'USA', focalPoint: 'John Miller', color: '#0A3D62' },
+                { id: 2, name: 'EuroMaintenance', country: 'Germany', focalPoint: 'Klaus Richter', color: '#C40233' },
+                { id: 3, name: 'Asia Pacific Aviation', country: 'Singapore', focalPoint: 'Wei Li', color: '#FFD700' },
+                { id: 4, name: 'SkyServe UK', country: 'United Kingdom', focalPoint: 'Emily Clark', color: '#005BBB' },
+            ];
+            
+            // --- DATA GENERATION FOR 2026 ---
+            const generateSchedule = () => {
+                const year = 2026;
+                const schedule = [];
+                const aircraftTypes = ["B777", "A320", "A330", "B787"];
+                const eventTypes = {
+                    'A-Check': { minDays: 2, maxDays: 5 },
+                    'B-Check': { minDays: 5, maxDays: 10 },
+                    'C-Check': { minDays: 10, maxDays: 20 },
+                    'Engine Swap': { minDays: 7, maxDays: 14 },
+                    'LDG Replacement': { minDays: 8, maxDays: 15 },
+                    'Avionics Upgrade': { minDays: 5, maxDays: 12 },
+                    'Cabin Refurb': { minDays: 15, maxDays: 25 },
+                    'Paint Job': { minDays: 7, maxDays: 10 },
+                };
+                const eventTypeKeys = Object.keys(eventTypes);
+                
+                const eventsPerMonth = [10, 12, 8, 14, 7, 5, 11, 13, 9, 6, 13, 12]; // Total 120
+                let eventIdCounter = 1;
+                let tailNumberCounter = 10000;
+
+                for (let month = 0; month < 12; month++) {
+                    const daysInMonth = new Date(year, month + 1, 0).getDate();
+                    for (let i = 0; i < eventsPerMonth[month]; i++) {
+                        const mro = mros[Math.floor(Math.random() * mros.length)];
+                        const eventType = eventTypeKeys[Math.floor(Math.random() * eventTypeKeys.length)];
+                        const durationInfo = eventTypes[eventType];
+                        const duration = Math.floor(Math.random() * (durationInfo.maxDays - durationInfo.minDays + 1)) + durationInfo.minDays;
+
+                        const startDay = Math.floor(Math.random() * (daysInMonth - duration > 0 ? daysInMonth-duration : 1)) + 1;
+                        const startDate = new Date(year, month, startDay);
+                        const endDate = new Date(startDate);
+                        endDate.setDate(startDate.getDate() + duration);
+                        
+                        let actualOutput = '';
+                        // 60% chance of being "completed"
+                        if (Math.random() < 0.6) {
+                             // 30% chance of delay
+                            if (Math.random() < 0.3) {
+                                const delay = Math.floor(Math.random() * 5) + 1;
+                                const actualEndDate = new Date(endDate);
+                                actualEndDate.setDate(endDate.getDate() + delay);
+                                actualOutput = actualEndDate.toISOString().split('T')[0];
+                            } else {
+                                actualOutput = endDate.toISOString().split('T')[0];
+                            }
+                        }
+
+                        schedule.push({
+                            id: eventIdCounter++,
+                            tail: `N${tailNumberCounter++}`,
+                            mro: mro.name,
+                            subType: aircraftTypes[Math.floor(Math.random() * aircraftTypes.length)],
+                            eventType: eventType,
+                            plannedInput: startDate.toISOString().split('T')[0],
+                            plannedOutput: endDate.toISOString().split('T')[0],
+                            actualOutput: actualOutput,
+                        });
+                    }
+                }
+                return schedule;
+            };
+
+            let maintenanceSchedule = generateSchedule();
+
+
+            // --- DOM ELEMENTS & STATE ---
+            const mainTabs = {
+                schedule: document.getElementById('tab-schedule'),
+                mro: document.getElementById('tab-mro'),
+                gantt: document.getElementById('tab-gantt'),
+                yearly: document.getElementById('tab-yearly'),
+            };
+            const mainContents = {
+                schedule: document.getElementById('content-schedule'),
+                mro: document.getElementById('content-mro'),
+                gantt: document.getElementById('content-gantt'),
+                yearly: document.getElementById('content-yearly'),
+            };
+            const addEventForm = document.getElementById('add-event-form');
+            const scheduleTableBody = document.getElementById('schedule-table-body');
+            const mroSelect = document.getElementById('mro-select');
+            const addMroForm = document.getElementById('add-mro-form');
+            const mroList = document.getElementById('mro-list');
+            const editEventModal = document.getElementById('edit-event-modal');
+            const editEventForm = document.getElementById('edit-event-form');
+            const editMroModal = document.getElementById('edit-mro-modal');
+            const editMroForm = document.getElementById('edit-mro-form');
+            const ganttSubTabs = {
+                preliminary: document.getElementById('gantt-sub-tab-preliminary'),
+                actual: document.getElementById('gantt-sub-tab-actual')
+            };
+            const ganttContainers = {
+                preliminary: document.getElementById('gantt-chart-container-preliminary'),
+                actual: document.getElementById('gantt-chart-container-actual')
+            };
+            const ganttYearSelect = document.getElementById('gantt-year-select');
+            const ganttTooltip = document.getElementById('gantt-tooltip');
+            const confirmationModal = document.getElementById('confirmation-modal');
+            const confirmationMessage = document.getElementById('confirmation-message');
+            const confirmOkBtn = document.getElementById('confirm-ok-btn');
+            const confirmCancelBtn = document.getElementById('confirm-cancel-btn');
+            const excelUploadInput = document.getElementById('excel-upload-input');
+            const uploadExcelBtn = document.getElementById('upload-excel-btn');
+            const downloadTemplateBtn = document.getElementById('download-template-btn');
+            const downloadGanttBtn = document.getElementById('download-gantt-btn');
+            const loadingModal = document.getElementById('loading-modal');
+            const yearlyCalendarContainer = document.getElementById('yearly-calendar-container');
+            const downloadYearlyBtn = document.getElementById('download-yearly-btn');
+            const yearlyYearSelect = document.getElementById('yearly-year-select');
+            
+            let activeGanttView = 'preliminary';
+            let dragState = null;
+
+            // --- FUNCTIONS ---
+            const formatDate = (date) => {
+                if (!date || isNaN(new Date(date))) return '';
+                return new Date(date).toISOString().split('T')[0]
+            };
+
+            const addDays = (dateStr, days) => {
+                const date = new Date(dateStr + 'T00:00:00');
+                date.setDate(date.getDate() + days);
+                return formatDate(date);
+            };
+
+            const syncColorInputs = (pickerId, hexId) => {
+                const picker = document.getElementById(pickerId);
+                const hex = document.getElementById(hexId);
+                picker.addEventListener('input', () => hex.value = picker.value);
+                hex.addEventListener('input', () => picker.value = hex.value);
+            };
+
+            const calculateExtension = (planned, actual) => {
+                if (!planned || !actual) return 'N/A';
+                const plannedDate = new Date(planned);
+                const actualDate = new Date(actual);
+                if (actualDate <= plannedDate) return 0;
+                const diffTime = actualDate - plannedDate;
+                const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                return diffDays;
+            };
+            
+            const populateYearSelector = () => {
+                const years = [...new Set(maintenanceSchedule.flatMap(e => [new Date(e.plannedInput).getFullYear(), new Date(e.plannedOutput).getFullYear()]))].filter(y => !isNaN(y) && y).sort();
+                if (years.length === 0) {
+                   const currentYear = new Date().getFullYear();
+                   years.push(currentYear -1, currentYear, currentYear + 1);
+                } else {
+                    const minYear = Math.min(...years);
+                    const maxYear = Math.max(...years);
+                    for(let y = minYear - 1; y <= maxYear + 2; y++) {
+                        if (!years.includes(y)) years.push(y);
+                    }
+                    years.sort();
+                }
+                
+                const targetYear = 2026;
+                const yearSelectors = [ganttYearSelect, yearlyYearSelect];
+                yearSelectors.forEach(selector => {
+                    const currentVal = selector.value;
+                    selector.innerHTML = '';
+                    years.forEach(year => {
+                        const option = document.createElement('option');
+                        option.value = year;
+                        option.textContent = year;
+                        selector.appendChild(option);
+                    });
+                     selector.value = currentVal || (years.includes(targetYear) ? targetYear : years[0]);
+                });
+            };
+            
+            const renderMroList = () => {
+                mroList.innerHTML = '';
+                if (mros.length === 0) {
+                    mroList.innerHTML = '<li class="text-gray-500">No MROs added yet.</li>';
+                } else {
+                    mros.forEach(mro => {
+                        const li = document.createElement('li');
+                        li.className = 'flex flex-col bg-gray-100 p-4 rounded-md shadow-sm';
+                        li.innerHTML = `
+                            <div class="flex justify-between items-start">
+                                <div class="flex items-center">
+                                    <span class="inline-block w-4 h-4 rounded-full mr-3" style="background-color: ${mro.color};"></span>
+                                    <span class="font-bold text-lg text-gray-800">${mro.name}</span>
+                                </div>
+                                <div class="flex space-x-3">
+                                    <button data-id="${mro.id}" class="edit-mro-btn text-blue-500 hover:text-blue-700 font-semibold text-sm">Edit</button>
+                                    <button data-id="${mro.id}" class="remove-mro-btn text-red-500 hover:text-red-700 font-semibold text-sm">Remove</button>
+                                </div>
+                            </div>
+                            <div class="mt-2 pl-7 text-sm text-gray-600">
+                                <p><strong>Country:</strong> ${mro.country}</p>
+                                <p><strong>Focal Point:</strong> ${mro.focalPoint}</p>
+                            </div>
+                        `;
+                        mroList.appendChild(li);
+                    });
+                }
+            };
+            
+            const populateMroDropdowns = () => {
+                const dropdowns = [mroSelect, document.getElementById('edit-mro-select')];
+                dropdowns.forEach(dropdown => {
+                    const currentVal = dropdown.value;
+                    dropdown.innerHTML = '<option value="" disabled selected>Select an MRO</option>';
+                     mros.forEach(mro => {
+                        const option = document.createElement('option');
+                        option.value = mro.name;
+                        option.textContent = mro.name;
+                        dropdown.appendChild(option);
+                    });
+                    if (currentVal && mros.some(m => m.name === currentVal)) {
+                        dropdown.value = currentVal;
+                    }
+                });
+            };
+
+            const renderSchedule = () => {
+                scheduleTableBody.innerHTML = '';
+                 if (maintenanceSchedule.length === 0) {
+                     scheduleTableBody.innerHTML = `<tr><td colspan="9" class="text-center py-10 text-gray-500">No maintenance events scheduled.</td></tr>`;
+                     return;
+                 }
+                maintenanceSchedule.sort((a,b) => new Date(a.plannedInput) - new Date(b.plannedInput));
+                maintenanceSchedule.forEach(event => {
+                    const mroData = mros.find(m => m.name === event.mro);
+                    const mroColor = mroData ? mroData.color : '#cccccc';
+                    const row = document.createElement('tr');
+                    row.className = 'hover:bg-gray-50';
+                    const extension = calculateExtension(event.plannedOutput, event.actualOutput);
+                    row.innerHTML = `
+                        <td class="py-3 px-4">${event.tail}</td>
+                        <td class="py-3 px-4">
+                            <div class="flex items-center">
+                                <span class="inline-block w-3 h-3 rounded-full mr-2" style="background-color: ${mroColor};"></span>
+                                ${event.mro}
+                            </div>
+                        </td>
+                        <td class="py-3 px-4">${event.subType}</td>
+                        <td class="py-3 px-4">${event.eventType}</td>
+                        <td class="py-3 px-4">${event.plannedInput}</td>
+                        <td class="py-3 px-4">${event.plannedOutput}</td>
+                        <td class="py-3 px-4">${event.actualOutput || 'Not yet output'}</td>
+                        <td class="py-3 px-4 ${extension > 0 ? 'text-red-600 font-semibold' : ''}">${extension}</td>
+                        <td class="py-3 px-4 text-center">
+                            <button data-id="${event.id}" class="edit-event-btn text-blue-500 hover:text-blue-700 font-semibold mr-3">Edit</button>
+                            <button data-id="${event.id}" class="remove-event-btn text-red-500 hover:text-red-700 font-semibold">Remove</button>
+                        </td>
+                    `;
+                    scheduleTableBody.appendChild(row);
+                });
+            };
+            
+            const openEditEventModal = (event) => {
+                document.getElementById('edit-event-id').value = event.id;
+                document.getElementById('edit-tail-number').value = event.tail;
+                document.getElementById('edit-mro-select').value = event.mro;
+                document.getElementById('edit-sub-type-select').value = event.subType;
+                document.getElementById('edit-event-type').value = event.eventType;
+                document.getElementById('edit-planned-input').value = event.plannedInput;
+                document.getElementById('edit-planned-output').value = event.plannedOutput;
+                document.getElementById('edit-actual-output').value = event.actualOutput;
+                editEventModal.classList.remove('hidden'); editEventModal.classList.add('flex');
+            };
+
+            const closeEditEventModal = () => { editEventModal.classList.add('hidden'); editEventModal.classList.remove('flex'); };
+
+            const openEditMroModal = (mro) => {
+                document.getElementById('edit-mro-id').value = mro.id;
+                document.getElementById('edit-mro-name').value = mro.name;
+                document.getElementById('edit-mro-country').value = mro.country;
+                document.getElementById('edit-mro-focal').value = mro.focalPoint;
+                document.getElementById('edit-mro-color-picker').value = mro.color;
+                document.getElementById('edit-mro-color-hex').value = mro.color;
+                editMroModal.classList.remove('hidden'); editMroModal.classList.add('flex');
+            };
+
+            const closeEditMroModal = () => { editMroModal.classList.add('hidden'); editMroModal.classList.remove('flex'); };
+
+            const renderGanttChart = (viewType, container) => {
+                const year = parseInt(ganttYearSelect.value);
+                container.innerHTML = '';
+                container.className = 'grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-6';
+
+                const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+                const today = new Date();
+                today.setHours(0,0,0,0);
+
+                for (let month = 0; month < 12; month++) {
+                    const firstDayOfMonth = new Date(year, month, 1);
+                    const lastDayOfMonth = new Date(year, month + 1, 0);
+                    const daysInThisMonth = lastDayOfMonth.getDate();
+
+                    const eventsInMonth = maintenanceSchedule.filter(e => {
+                        const eventStart = new Date(e.plannedInput);
+                        const eventEnd = new Date(viewType === 'actual' && e.actualOutput ? e.actualOutput : e.plannedOutput);
+                        return eventStart <= lastDayOfMonth && eventEnd >= firstDayOfMonth;
+                    });
+                    
+                    const uniqueMrosInMonth = [...new Set(eventsInMonth.map(e => e.mro))].sort();
+                    
+                    let monthHtml = `<div class="border border-gray-200 rounded-lg shadow-sm overflow-hidden bg-white" data-month="${month}" data-year="${year}">
+                        <h3 class="font-bold text-center text-gray-700 p-2 bg-gray-100 border-b border-gray-200">${monthNames[month]} ${year}</h3>
+                        <div class="gantt-month-grid text-xs">
+                            <div class="border-r border-b border-gray-200"></div><div class="gantt-day-header border-b border-gray-200">`;
+                    for(let day = 1; day <= daysInThisMonth; day++) {
+                        monthHtml += `<div class="text-center text-gray-500 py-1 ${day > 1 ? 'border-l' : ''} border-gray-200">${day % 2 !== 0 ? day : ''}</div>`;
+                    }
+                    monthHtml += `</div>`;
+
+                    if (uniqueMrosInMonth.length === 0) {
+                         monthHtml += `<div class="col-span-2 text-center p-4 text-gray-400">No events</div>`;
+                    } else {
+                        uniqueMrosInMonth.forEach(mroName => {
+                            const mroEvents = eventsInMonth.filter(e => e.mro === mroName).sort((a,b) => new Date(a.plannedInput) - new Date(b.plannedInput));
+                            const eventRows = [];
+                            mroEvents.forEach(event => {
+                                let placed = false;
+                                for (let i = 0; i < eventRows.length; i++) {
+                                    const lastEventEndInRow = new Date(eventRows[i][eventRows[i].length - 1].plannedOutput);
+                                    if (new Date(event.plannedInput) > lastEventEndInRow) {
+                                        eventRows[i].push(event);
+                                        placed = true;
+                                        break;
+                                    }
+                                }
+                                if (!placed) {
+                                    eventRows.push([event]);
+                                }
+                            });
+                            
+                            const mroData = mros.find(m => m.name === mroName);
+                            const mroColor = mroData ? mroData.color : '#A0AEC0';
+
+                            eventRows.forEach((rowOfEvents, rowIndex) => {
+                                if (rowIndex === 0) {
+                                    monthHtml += `<div class="font-semibold text-gray-600 truncate p-1 border-r border-b border-gray-200 flex items-center bg-gray-50" style="grid-row: span ${eventRows.length}">${mroName}</div>`;
+                                }
+                                monthHtml += `<div class="relative gantt-timeline-row border-b border-gray-200">`;
+                                
+                                rowOfEvents.forEach(event => {
+                                    const eventStart = new Date(event.plannedInput);
+                                    const plannedEnd = new Date(event.plannedOutput);
+                                    const actualEnd = event.actualOutput ? new Date(event.actualOutput) : null;
+                                    const isPastEvent = eventStart < today;
+
+                                    const barStart = eventStart < firstDayOfMonth ? firstDayOfMonth : eventStart;
+                                    
+                                    const mainBarEndDate = (viewType === 'actual' && actualEnd) ? actualEnd : plannedEnd;
+                                    const barEnd = mainBarEndDate > lastDayOfMonth ? lastDayOfMonth : mainBarEndDate;
+
+                                    const startDay = barStart.getDate();
+                                    
+                                    const duration = Math.max(0, (barEnd.getTime() - barStart.getTime()) / (1000 * 3600 * 24)) + 1;
+
+                                    const left = `calc(${(100 / daysInThisMonth) * (startDay - 1)}%)`;
+                                    const width = `calc(${(100 / daysInThisMonth) * duration}%)`;
+                                    
+                                    let barTooltip = `${event.tail} (${event.subType}) - ${event.mro}<br>${event.eventType}<br>Planned: ${event.plannedInput} to ${event.plannedOutput}`;
+                                    if(event.actualOutput) {
+                                        barTooltip += `<br>Actual: ${event.actualOutput}`;
+                                    }
+
+                                    monthHtml += `<div class="gantt-event-bar ${isPastEvent ? 'past-event' : ''}"
+                                                       style="background-color: ${mroColor}; left: ${left}; width: ${width};"
+                                                       data-id="${event.id}" data-tooltip="${barTooltip}">
+                                                    ${event.tail} (${event.subType})
+                                                    <div class="resizer ${isPastEvent ? 'hidden' : ''}"></div>
+                                                  </div>`;
+                                    
+                                    if (viewType === 'preliminary' && actualEnd && actualEnd > plannedEnd) {
+                                        const extStart = plannedEnd < firstDayOfMonth ? firstDayOfMonth : new Date(plannedEnd.getTime() + (1000 * 3600 * 24));
+                                        const extEnd = actualEnd > lastDayOfMonth ? lastDayOfMonth : actualEnd;
+
+                                        if (extEnd >= extStart) {
+                                            const extStartDay = extStart.getDate();
+                                            const extDuration = (extEnd.getTime() - extStart.getTime()) / (1000 * 3600 * 24) + 1;
+                                            const extLeft = `calc(${(100 / daysInThisMonth) * (extStartDay - 1)}%)`;
+                                            const extWidth = `calc(${(100 / daysInThisMonth) * extDuration}%)`;
+                                            
+                                            monthHtml += `<div class="gantt-event-extension" style="background-color: ${mroColor}; left: ${extLeft}; width: ${extWidth};" data-tooltip="Delay for ${event.tail}"></div>`;
+                                        }
+                                    }
+                                });
+                                monthHtml += `</div>`;
+                            });
+                        });
+                    }
+                    monthHtml += `</div></div>`;
+                    container.innerHTML += monthHtml;
+                }
+            };
+            
+            const renderYearlyCalendar = () => {
+                const year = parseInt(yearlyYearSelect.value);
+                yearlyCalendarContainer.innerHTML = '';
+                const mainGrid = document.createElement('div');
+                mainGrid.className = 'grid grid-cols-4 gap-x-6 gap-y-8';
+                yearlyCalendarContainer.appendChild(mainGrid);
+
+                const monthNames = ["JANUARY", "FEBRUARY", "MARCH", "APRIL", "MAY", "JUNE", "JULY", "AUGUST", "SEPTEMBER", "OCTOBER", "NOVEMBER", "DECEMBER"];
+
+                for (let month = 0; month < 12; month++) {
+                    const monthContainer = document.createElement('div');
+                    monthContainer.className = 'yearly-calendar-month-block text-xs';
+                    
+                    const firstDayOfMonth = new Date(year, month, 1);
+                    const lastDayOfMonth = new Date(year, month + 1, 0);
+                    const daysInMonth = lastDayOfMonth.getDate();
+                    monthContainer.dataset.daysInMonth = daysInMonth;
+                    monthContainer.dataset.month = month;
+                    monthContainer.dataset.year = year;
+
+                    // Month Header and Day Ticks
+                    let headerHtml = `<h4 class="text-center font-bold text-sm mb-2">${monthNames[month]}</h4>`;
+                    headerHtml += `<div class="grid yearly-day-ticks" style="grid-template-columns: repeat(${daysInMonth}, 1fr);">`;
+                    for (let day = 1; day <= daysInMonth; day++) {
+                        headerHtml += `<div class="text-center border-r ${day === daysInMonth ? 'border-r-0' : 'border-gray-200'}">
+                                        <span class="text-gray-500 text-[9px]">${day % 2 !== 0 ? day : ''}</span>
+                                    </div>`;
+                    }
+                    headerHtml += '</div>';
+
+                    const eventsContainer = document.createElement('div');
+                    eventsContainer.className = 'relative border-t border-gray-300';
+                    
+                    const eventsInMonth = maintenanceSchedule.filter(e => {
+                        const eventStart = new Date(e.plannedInput);
+                        const eventEnd = new Date(e.plannedOutput);
+                        return eventStart <= lastDayOfMonth && eventEnd >= firstDayOfMonth;
+                    });
+                    
+                    const uniqueMrosInMonth = [...new Set(eventsInMonth.map(e => e.mro))].sort();
+                    
+                    let totalRowsInMonth = 0;
+                    let eventsHtml = '';
+
+                    uniqueMrosInMonth.forEach(mroName => {
+                        const mroEvents = eventsInMonth.filter(e => e.mro === mroName).sort((a,b) => new Date(a.plannedInput) - new Date(b.plannedInput));
+                        const mroEventRows = [];
+                        
+                        mroEvents.forEach(event => {
+                            let placed = false;
+                            for (let i = 0; i < mroEventRows.length; i++) {
+                                const lastEventEndInRow = new Date(mroEventRows[i][mroEventRows[i].length - 1].plannedOutput);
+                                if (new Date(event.plannedInput) > lastEventEndInRow) {
+                                    mroEventRows[i].push(event); placed = true; break;
+                                }
+                            }
+                            if (!placed) mroEventRows.push([event]);
+                        });
+
+                        mroEventRows.forEach((rowOfEvents, rowIndex) => {
+                             rowOfEvents.forEach(event => {
+                                const mroData = mros.find(m => m.name === event.mro);
+                                const mroColor = mroData ? mroData.color : '#A0AEC0';
+                                
+                                const eventStart = new Date(event.plannedInput);
+                                const eventEnd = new Date(event.plannedOutput);
+
+                                const barStart = eventStart < firstDayOfMonth ? firstDayOfMonth : eventStart;
+                                const barEnd = eventEnd > lastDayOfMonth ? lastDayOfMonth : eventEnd;
+
+                                const startDay = barStart.getDate();
+                                const duration = Math.max(0.8, (barEnd.getTime() - barStart.getTime()) / (1000 * 3600 * 24)) + 1;
+
+                                const left = `calc(${(100 / daysInMonth) * (startDay - 1)}%)`;
+                                const width = `calc(${(100 / daysInMonth) * duration}%)`;
+                                const top = (totalRowsInMonth + rowIndex) * 20;
+
+                                let eventClasses = "yearly-event-item";
+                                if (eventStart < firstDayOfMonth) eventClasses += " is-continuing-start";
+                                if (eventEnd > lastDayOfMonth) eventClasses += " is-continuing-end";
+                                
+                                eventsHtml += `<div class="${eventClasses}" 
+                                                    data-id="${event.id}"
+                                                    style="top: ${top}px; left: ${left}; width: ${width}; border-color:${mroColor};"
+                                                    data-tooltip="${event.tail} (${event.subType}): ${event.eventType}">
+                                                    <span class="yearly-event-label">${event.tail} (${event.subType}) - ${event.eventType}</span>
+                                                    <div class="yearly-event-line" style="background-color: ${mroColor};"></div>
+                                                    <div class="resizer"></div>
+                                               </div>`;
+                            });
+                        });
+                        totalRowsInMonth += mroEventRows.length;
+                    });
+
+
+                    eventsContainer.innerHTML = eventsHtml;
+                    eventsContainer.style.height = `${totalRowsInMonth * 20}px`;
+
+                    monthContainer.innerHTML = headerHtml;
+                    monthContainer.appendChild(eventsContainer);
+                    mainGrid.appendChild(monthContainer);
+                }
+            };
+            
+            const refreshAllViews = () => {
+                renderSchedule();
+                renderGanttChart('preliminary', ganttContainers.preliminary);
+                renderGanttChart('actual', ganttContainers.actual);
+                if (mainContents.yearly.classList.contains('hidden') === false) {
+                    renderYearlyCalendar();
+                }
+            };
+
+            const switchTab = (tabKey) => {
+                 Object.keys(mainContents).forEach(key => {
+                     mainContents[key].classList.toggle('hidden', key !== tabKey);
+                     mainTabs[key].classList.toggle('active', key === tabKey);
+                 });
+                 if (tabKey === 'gantt' || tabKey === 'yearly') {
+                     populateYearSelector();
+                     if (tabKey === 'gantt') switchGanttSubTab(activeGanttView);
+                     if (tabKey === 'yearly') renderYearlyCalendar();
+                 }
+            };
+
+            const switchGanttSubTab = (view) => {
+                activeGanttView = view;
+                Object.keys(ganttSubTabs).forEach(key => {
+                    ganttSubTabs[key].classList.toggle('active', key === view);
+                    ganttContainers[key].classList.toggle('hidden', key !== view);
+                });
+                refreshAllViews();
+            };
+
+            const showConfirmation = (message, onConfirm) => {
+                confirmationMessage.innerHTML = message;
+                confirmationModal.classList.remove('hidden');
+                confirmationModal.classList.add('flex');
+
+                const confirmHandler = () => {
+                    onConfirm();
+                    hideConfirmation();
+                };
+
+                const hideConfirmation = () => {
+                    confirmationModal.classList.add('hidden');
+                    confirmationModal.classList.remove('flex');
+                    confirmOkBtn.removeEventListener('click', confirmHandler);
+                    confirmCancelBtn.removeEventListener('click', cancelHandler);
+                };
+                
+                const cancelHandler = () => {
+                    hideConfirmation();
+                    if(document.body.style.userSelect === 'none') refreshAllViews(); 
+                }
+                
+                confirmOkBtn.addEventListener('click', confirmHandler, { once: true });
+                confirmCancelBtn.addEventListener('click', cancelHandler, { once: true });
+            };
+
+            // --- EVENT LISTENERS ---
+            Object.keys(mainTabs).forEach(key => {
+                mainTabs[key].addEventListener('click', () => switchTab(key));
+            });
+            
+            document.addEventListener('mouseover', e => {
+                const bar = e.target.closest('[data-tooltip]');
+                if (bar) {
+                    ganttTooltip.innerHTML = bar.dataset.tooltip;
+                    ganttTooltip.style.visibility = 'visible';
+                    ganttTooltip.style.opacity = '1';
+                }
+            });
+            document.addEventListener('mouseout', e => {
+                 const bar = e.target.closest('[data-tooltip]');
+                 if (bar) {
+                    ganttTooltip.style.visibility = 'hidden';
+                    ganttTooltip.style.opacity = '0';
+                 }
+            });
+             document.addEventListener('mousemove', e => {
+                if (ganttTooltip.style.visibility === 'visible') {
+                    ganttTooltip.style.left = `${e.clientX + 15}px`;
+                    ganttTooltip.style.top = `${e.clientY + 15}px`;
+                }
+            });
+
+
+            ganttSubTabs.preliminary.addEventListener('click', () => switchGanttSubTab('preliminary'));
+            ganttSubTabs.actual.addEventListener('click', () => switchGanttSubTab('actual'));
+            ganttYearSelect.addEventListener('change', (e) => {
+                yearlyYearSelect.value = e.target.value;
+                refreshAllViews();
+            });
+            yearlyYearSelect.addEventListener('change', (e) => {
+                ganttYearSelect.value = e.target.value;
+                renderYearlyCalendar();
+            });
+            
+            addMroForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                const newMroName = document.getElementById('new-mro-name').value.trim();
+                if (newMroName && !mros.some(m => m.name === newMroName)) {
+                    const newMro = { id: Date.now(), name: newMroName, country: document.getElementById('new-mro-country').value, focalPoint: document.getElementById('new-mro-focal').value, color: document.getElementById('new-mro-color-hex').value };
+                    mros.push(newMro);
+                    renderMroList();
+                    populateMroDropdowns();
+                    refreshAllViews();
+                    addMroForm.reset();
+                    document.getElementById('new-mro-color-picker').value = '#3b82f6';
+                } else { 
+                    showConfirmation("MRO name cannot be empty or already exist.", ()=>{});
+                }
+            });
+
+            mroList.addEventListener('click', (e) => {
+                if (e.target.classList.contains('remove-mro-btn')) {
+                    const mroId = parseInt(e.target.dataset.id);
+                    const mro = mros.find(m=>m.id === mroId);
+                    showConfirmation(`Are you sure you want to remove ${mro.name}?`, ()=>{
+                        mros = mros.filter(m => m.id !== mroId);
+                        renderMroList(); populateMroDropdowns(); refreshAllViews();
+                    });
+                }
+                if (e.target.classList.contains('edit-mro-btn')) {
+                    const mroToEdit = mros.find(m => m.id === parseInt(e.target.dataset.id));
+                    openEditMroModal(mroToEdit);
+                }
+            });
+
+            addEventForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                const newEvent = { 
+                    id: Date.now(), 
+                    tail: document.getElementById('tail-number').value, 
+                    mro: mroSelect.value, 
+                    subType: document.getElementById('sub-type-select').value, 
+                    eventType: document.getElementById('event-type').value, 
+                    plannedInput: document.getElementById('planned-input').value, 
+                    plannedOutput: document.getElementById('planned-output').value, 
+                    actualOutput: '' 
+                };
+                maintenanceSchedule.push(newEvent);
+                refreshAllViews();
+                addEventForm.reset();
+            });
+
+            scheduleTableBody.addEventListener('click', (e) => {
+                if (e.target.classList.contains('remove-event-btn')) {
+                    const eventId = parseInt(e.target.dataset.id);
+                    const event = maintenanceSchedule.find(ev=>ev.id === eventId);
+                     showConfirmation(`Are you sure you want to remove the event for ${event.tail}?`, ()=>{
+                        maintenanceSchedule = maintenanceSchedule.filter(event => event.id !== eventId);
+                        refreshAllViews();
+                    });
+                }
+                if (e.target.classList.contains('edit-event-btn')) {
+                    const eventToEdit = maintenanceSchedule.find(event => event.id === parseInt(e.target.dataset.id));
+                    openEditEventModal(eventToEdit);
+                }
+            });
+            
+            editEventForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                const eventId = parseInt(document.getElementById('edit-event-id').value);
+                const eventIndex = maintenanceSchedule.findIndex(event => event.id === eventId);
+                if (eventIndex > -1) {
+                    maintenanceSchedule[eventIndex] = { 
+                        id: eventId, 
+                        tail: document.getElementById('edit-tail-number').value, 
+                        mro: document.getElementById('edit-mro-select').value, 
+                        subType: document.getElementById('edit-sub-type-select').value,
+                        eventType: document.getElementById('edit-event-type').value, 
+                        plannedInput: document.getElementById('edit-planned-input').value, 
+                        plannedOutput: document.getElementById('edit-planned-output').value, 
+                        actualOutput: document.getElementById('edit-actual-output').value, 
+                    };
+                }
+                refreshAllViews();
+                closeEditEventModal();
+            });
+
+            document.querySelectorAll('.cancel-edit-btn').forEach(btn => btn.addEventListener('click', closeEditEventModal));
+            
+            editMroForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                const mroId = parseInt(document.getElementById('edit-mro-id').value);
+                const mroIndex = mros.findIndex(m => m.id === mroId);
+                if(mroIndex > -1) {
+                    const oldName = mros[mroIndex].name;
+                    const newName = document.getElementById('edit-mro-name').value;
+                    mros[mroIndex] = { id: mroId, name: newName, country: document.getElementById('edit-mro-country').value, focalPoint: document.getElementById('edit-mro-focal').value, color: document.getElementById('edit-mro-color-hex').value, };
+                    if (oldName !== newName) { maintenanceSchedule.forEach(event => { if (event.mro === oldName) { event.mro = newName; } }); }
+                }
+                renderMroList(); populateMroDropdowns(); refreshAllViews();
+                closeEditMroModal();
+            });
+             document.querySelectorAll('.cancel-edit-mro-btn').forEach(btn => btn.addEventListener('click', closeEditMroModal));
+
+            // --- EXCEL UPLOAD/DOWNLOAD LOGIC ---
+            downloadTemplateBtn.addEventListener('click', () => {
+                const sampleMros = [
+                    { name: 'AeroFix Solutions', country: 'USA', focalPoint: 'John Miller', color: '#0A3D62' },
+                    { name: 'SkyServe UK', country: 'United Kingdom', focalPoint: 'Emily Clark', color: '#005BBB' }
+                ];
+                const sampleSchedule = [
+                    { 'Tail Number': 'N12345', 'MRO Name': 'AeroFix Solutions', 'Sub Type': 'B777', 'Event Type': 'C-Check', 'Planned Input': '2026-01-15', 'Planned Output': '2026-01-30', 'Actual Output': '' },
+                    { 'Tail Number': 'N67890', 'MRO Name': 'SkyServe UK', 'Sub Type': 'A320', 'Event Type': 'Engine Swap', 'Planned Input': '2026-02-10', 'Planned Output': '2026-02-24', 'Actual Output': '2026-02-25' }
+                ];
+                const mroWorksheet = XLSX.utils.json_to_sheet(sampleMros);
+                const scheduleWorksheet = XLSX.utils.json_to_sheet(sampleSchedule);
+                const workbook = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(workbook, mroWorksheet, "MROs");
+                XLSX.utils.book_append_sheet(workbook, scheduleWorksheet, "Schedule");
+                XLSX.writeFile(workbook, "Fleet_Schedule_Template.xlsx");
+            });
+
+            uploadExcelBtn.addEventListener('click', () => {
+                const file = excelUploadInput.files[0];
+                if (!file) {
+                    showConfirmation("Please select an Excel file first.", () => {});
+                    return;
+                }
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    try {
+                        const data = new Uint8Array(e.target.result);
+                        const workbook = XLSX.read(data, { type: 'array', cellDates: true });
+
+                        const mroSheet = workbook.Sheets['MROs'];
+                        const scheduleSheet = workbook.Sheets['Schedule'];
+
+                        if (!mroSheet || !scheduleSheet) throw new Error("Invalid file. Make sure it contains 'MROs' and 'Schedule' sheets.");
+                        
+                        const newMros = XLSX.utils.sheet_to_json(mroSheet);
+                        const newSchedule = XLSX.utils.sheet_to_json(scheduleSheet);
+
+                        if (newMros.length === 0 || newSchedule.length === 0) throw new Error("Sheets in the Excel file cannot be empty.");
+                        
+                        // Basic validation of schedule columns
+                        const requiredCols = ['Tail Number', 'MRO Name', 'Sub Type', 'Event Type', 'Planned Input', 'Planned Output'];
+                        const firstRow = newSchedule[0];
+                        for(const col of requiredCols) {
+                            if(!(col in firstRow)) throw new Error(`Missing required column in 'Schedule' sheet: ${col}`);
+                        }
+
+                        const formattedSchedule = newSchedule.map((event, index) => ({
+                            id: event.id || Date.now() + index, // Ensure unique ID
+                            tail: event['Tail Number'],
+                            mro: event['MRO Name'],
+                            subType: event['Sub Type'],
+                            eventType: event['Event Type'],
+                            plannedInput: formatDate(event['Planned Input']),
+                            plannedOutput: formatDate(event['Planned Output']),
+                            actualOutput: formatDate(event['Actual Output']),
+                        }));
+
+                        showConfirmation("This will overwrite all current MRO and Schedule data. Are you sure you want to proceed?", () => {
+                            mros = newMros.map((mro, index) => ({ ...mro, id: mro.id || Date.now() + index }));
+                            maintenanceSchedule = formattedSchedule;
+                            init(); // Re-initialize the whole app state
+                            setTimeout(()=> showConfirmation("Data imported successfully!", () => {}), 200);
+                        });
+
+                    } catch (error) {
+                        console.error("Upload error:", error);
+                        showConfirmation(`<b>Upload Failed:</b><br><span class="text-sm">${error.message}</span>`, () => {});
+                    } finally {
+                        excelUploadInput.value = ''; // Reset file input
+                    }
+                };
+                reader.readAsArrayBuffer(file);
+            });
+
+            // --- GANTT DOWNLOAD LOGIC ---
+            downloadGanttBtn.addEventListener('click', () => {
+                const container = ganttContainers[activeGanttView];
+                const originalClasses = container.className;
+                
+                loadingModal.querySelector('h3').textContent = 'Generating Image...';
+                loadingModal.classList.remove('hidden');
+                loadingModal.classList.add('flex');
+                
+                // Temporarily adjust layout for a single-page screenshot
+                container.className = 'grid grid-cols-1 gap-6';
+
+                // Use a short timeout to allow the DOM to update before capturing
+                setTimeout(() => {
+                    html2canvas(container, { scale: 2, useCORS: true }).then(canvas => {
+                        const link = document.createElement('a');
+                        const year = ganttYearSelect.value;
+                        const view = activeGanttView.charAt(0).toUpperCase() + activeGanttView.slice(1);
+                        link.download = `Gantt_Chart_${year}_${view}.png`;
+                        link.href = canvas.toDataURL('image/png');
+                        link.click();
+                    }).finally(() => {
+                        // Restore original layout and hide loading modal
+                        container.className = originalClasses;
+                        loadingModal.classList.add('hidden');
+                        loadingModal.classList.remove('flex');
+                    });
+                }, 200);
+            });
+
+            // --- YEARLY VIEW DOWNLOAD LOGIC ---
+            downloadYearlyBtn.addEventListener('click', () => {
+                const { jsPDF } = window.jspdf;
+                const container = yearlyCalendarContainer;
+                const loadingModalText = loadingModal.querySelector('h3');
+                
+                loadingModalText.textContent = 'Generating PDF...';
+                loadingModal.classList.remove('hidden');
+                loadingModal.classList.add('flex');
+
+                const year = yearlyYearSelect.value;
+                const doc = new jsPDF({
+                    orientation: 'landscape',
+                    unit: 'pt',
+                    format: 'a4',
+                });
+
+                doc.html(container, {
+                    callback: function (doc) {
+                        doc.save(`Yearly_View_${year}.pdf`);
+                        loadingModal.classList.add('hidden');
+                        loadingModal.classList.remove('flex');
+                    },
+                    margin: [20, 20, 20, 20],
+                    autoPaging: 'text',
+                    width: 802, // A4 landscape width in points minus margins
+                    windowWidth: 1200, // Render at a consistent wide width
+                });
+            });
+
+
+            // --- Drag and Drop Logic ---
+            document.body.addEventListener('mousedown', e => {
+                const bar = e.target.closest('.gantt-event-bar, .yearly-event-item');
+                if (!bar) return;
+
+                const eventId = parseInt(bar.dataset.id);
+                const event = maintenanceSchedule.find(ev => ev.id === eventId);
+                if (!event) return;
+                
+                const isPastEvent = new Date(event.plannedInput) < new Date(new Date().toISOString().split('T')[0]);
+                if (isPastEvent) return;
+
+                let dayWidth;
+                let monthBox;
+
+                if (bar.classList.contains('gantt-event-bar')) {
+                    monthBox = bar.closest('[data-month]');
+                    dayWidth = monthBox.querySelector('.gantt-timeline-row').clientWidth / new Date(parseInt(monthBox.dataset.year), parseInt(monthBox.dataset.month) + 1, 0).getDate();
+                } else {
+                    monthBox = bar.closest('.yearly-calendar-month-block');
+                    const daysInMonth = parseInt(monthBox.dataset.daysInMonth);
+                    const timeline = monthBox.querySelector('.yearly-day-ticks');
+                    dayWidth = timeline.clientWidth / daysInMonth;
+                }
+                
+                dragState = {
+                    eventId, bar, monthBox, dayWidth,
+                    type: e.target.classList.contains('resizer') ? 'resize' : 'move',
+                    startX: e.clientX,
+                    originalWidth: bar.offsetWidth,
+                    originalLeft: bar.offsetLeft,
+                    originalStart: event.plannedInput,
+                    originalPlannedEnd: event.plannedOutput,
+                };
+                
+                if (dragState.type === 'move') bar.style.cursor = 'grabbing';
+                document.body.style.userSelect = 'none';
+            });
+            
+            document.addEventListener('mousemove', e => {
+                if (!dragState) return;
+                e.preventDefault();
+                const dx = e.clientX - dragState.startX;
+                if (dragState.type === 'resize') {
+                    dragState.bar.style.width = `${Math.max(dragState.dayWidth, dragState.originalWidth + dx)}px`;
+                } else if (dragState.type === 'move') {
+                    dragState.bar.style.left = `${dragState.originalLeft + dx}px`;
+                }
+            });
+
+            document.addEventListener('mouseup', e => {
+                if (!dragState) return;
+                
+                const dx = e.clientX - dragState.startX;
+                const dayDelta = Math.round(dx / dragState.dayWidth);
+                const event = maintenanceSchedule.find(ev => ev.id === dragState.eventId);
+
+                dragState.bar.style.cursor = 'grab';
+                document.body.style.userSelect = '';
+                
+                const currentDragState = { ...dragState };
+                dragState = null;
+
+                if (dayDelta !== 0) {
+                     if (currentDragState.type === 'resize') {
+                        const newPlannedEnd = addDays(currentDragState.originalPlannedEnd, dayDelta);
+                        if(new Date(newPlannedEnd) < new Date(event.plannedInput)) { refreshAllViews(); return; }
+                        
+                        showConfirmation(`Change planned output for <b>${event.tail}</b> to <b>${newPlannedEnd}</b>?`, () => {
+                            event.plannedOutput = newPlannedEnd;
+                            refreshAllViews();
+                        });
+                     } else if (currentDragState.type === 'move') {
+                        const newPlannedStart = addDays(currentDragState.originalStart, dayDelta);
+                        const duration = (new Date(currentDragState.originalPlannedEnd) - new Date(currentDragState.originalStart)) / (1000*60*60*24);
+                        const newPlannedEnd = addDays(newPlannedStart, duration);
+                         showConfirmation(`Change planned dates for <b>${event.tail}</b> to <b>${newPlannedStart} - ${newPlannedEnd}</b>?`, () => {
+                            event.plannedInput = newPlannedStart;
+                            event.plannedOutput = newPlannedEnd;
+                            event.actualOutput = ''; 
+                            refreshAllViews();
+                        });
+                    }
+                } else {
+                    refreshAllViews(); // Snap back if no change
+                }
+            });
+
+            // --- INITIAL RENDER & SETUP ---
+            const init = () => {
+                syncColorInputs('new-mro-color-picker', 'new-mro-color-hex');
+                syncColorInputs('edit-mro-color-picker', 'edit-mro-color-hex');
+                renderMroList();
+                populateMroDropdowns();
+                populateYearSelector();
+                switchTab('schedule');
+            };
+            
+            init();
+
+        });
+    </script>
+</body>
+</html>
+
